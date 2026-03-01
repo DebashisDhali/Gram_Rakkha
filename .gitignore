@@ -1,0 +1,26 @@
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+backend/.venv/
+backend/env/
+backend/gram_raksha.db
+backend/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
