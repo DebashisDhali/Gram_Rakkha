@@ -12,9 +12,19 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ALGORITHM: str = "HS256"
     
-    # DATABASE (Local SQLite by default for immediate functionality, switch to Neon/Postgres for production)
-    # Production example: postgresql+asyncpg://user:password@host:port/dbname
+    # DATABASE (Detects Railway/Production automatically)
+    # Default to Local SQLite for MVP
     DATABASE_URL: str = "sqlite+aiosqlite:///./gram_raksha.db"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_db_url(cls, v: Union[str, None]) -> str:
+        if v and v.startswith("postgres://"):
+            # Railway often gives postgres://, but SQLAlchemy needs postgresql+asyncpg://
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v and v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v or "sqlite+aiosqlite:///./gram_raksha.db"
     
     # REDIS (Upstash or Local Docker)
     REDIS_URL: str = "redis://localhost:6379/0"
