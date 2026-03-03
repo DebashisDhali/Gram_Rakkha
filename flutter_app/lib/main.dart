@@ -7,7 +7,9 @@ import 'package:gram_rakkha/features/emergency/alert_dashboard.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService().init();
+  final ns = NotificationService();
+  await ns.init();
+  await ns.requestPermissions();
   runApp(
     const ProviderScope(
       child: MyApp(),

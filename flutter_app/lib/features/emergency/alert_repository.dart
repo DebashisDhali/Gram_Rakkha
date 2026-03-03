@@ -26,4 +26,8 @@ class AlertRepository {
     final response = await _client.get('/emergency/recent');
     return (response.data as List).map((e) => AlertEntity.fromJson(e)).toList();
   }
+
+  Future<void> verifyAlert(String alertId) async {
+    await _client.post('/emergency/$alertId/verify');
+  }
 }

@@ -20,8 +20,6 @@ async def create_alert(
     current_user: User = Depends(deps.get_current_active_user)
 ):
     alert_repo = AlertRepository(db)
-    # 1. Persist the alert
-    # Logic: For production, we'd use a transaction and background task
     new_alert = Alert(
         reporter_id=current_user.id,
         type=alert_in.type,
@@ -31,28 +29,20 @@ async def create_alert(
     db.add(new_alert)
     await db.flush()
     
-    # 2. Targeted Notify
-    user_repo = UserRepository(db)
+    # Notify Priority Contacts first
     priority_repo = PriorityContactRepository(db)
-    
-    # Get nearby users (within 500m)
-    nearby_users = await user_repo.get_nearby_users(alert_in.lat, alert_in.lng, radius_km=0.5)
-    nearby_user_ids = {str(u.id) for u in nearby_users}
-    
-    # Get priority contacts
     priority_contacts = await priority_repo.get_user_priority_contacts(current_user.id)
     priority_ids = {str(c.contact_user_id) for c in priority_contacts}
     
-    # Final target list (set handles duplicates)
-    target_ids = nearby_user_ids.union(priority_ids)
-    # Always notify the reporter (for confirmation UI)
-    target_ids.add(str(current_user.id))
+    # Always notify the reporter
+    target_ids = priority_ids.union({str(current_user.id)})
     
     alert_msg = {
         "event": "EMERGENCY_ALERT",
         "payload": {
             "id": str(new_alert.id),
             "type": new_alert.type.value,
+            "status": new_alert.status.value,
             "location": {"lat": new_alert.lat, "lng": new_alert.lng},
             "reporter": current_user.full_name,
             "reporter_id": str(current_user.id),
@@ -60,13 +50,66 @@ async def create_alert(
         }
     }
     
-    # Notify targeted users
     for user_id in target_ids:
         await manager.send_personal_message(alert_msg, user_id)
     
     await db.commit()
     await db.refresh(new_alert)
     return new_alert
+
+@router.post("/{alert_id}/verify", response_model=AlertOut)
+async def verify_alert(
+    alert_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(deps.get_current_active_user)
+):
+    alert_repo = AlertRepository(db)
+    alert = await alert_repo.get(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    # Check if already verified
+    if alert.status == "verified":
+         return alert
+
+    # Persist verification
+    await alert_repo.verify_alert(str(alert_id), str(current_user.id))
+    await db.flush()
+    
+    # Check if verifications from priority contacts reach threshold (2)
+    priority_repo = PriorityContactRepository(db)
+    priority_contacts = await priority_repo.get_user_priority_contacts(alert.reporter_id)
+    priority_ids = [c.contact_user_id for c in priority_contacts]
+    
+    p_verify_count = await alert_repo.get_priority_verifications_count(str(alert_id), priority_ids)
+    
+    if p_verify_count >= 2:
+        # ESCALATE TO ALL USERS
+        from app.models.alert import AlertStatus
+        alert.status = AlertStatus.VERIFIED
+        await db.flush()
+        
+        # Notify ALL users
+        user_repo = UserRepository(db)
+        all_users = await user_repo.list()
+        
+        alert_msg = {
+            "event": "ALERT_VERIFIED",
+            "payload": {
+                "id": str(alert.id),
+                "type": alert.type.value,
+                "status": alert.status.value,
+                "location": {"lat": alert.lat, "lng": alert.lng},
+                "reporter_id": str(alert.reporter_id),
+                "timestamp": str(alert.timestamp)
+            }
+        }
+        for u in all_users:
+            await manager.send_personal_message(alert_msg, str(u.id))
+            
+    await db.commit()
+    await db.refresh(alert)
+    return alert
 
 @router.websocket("/ws/{token}")
 async def alert_websocket(websocket: WebSocket, token: str):
@@ -79,7 +122,6 @@ async def alert_websocket(websocket: WebSocket, token: str):
     await manager.connect(websocket, user_id)
     try:
         while True:
-            # Low-latency heartbeats or simple receipt
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, user_id)

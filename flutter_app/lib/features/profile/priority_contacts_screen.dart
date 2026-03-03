@@ -11,10 +11,10 @@ class PriorityContactsScreen extends ConsumerStatefulWidget {
 }
 
 class _PriorityContactsScreenState extends ConsumerState<PriorityContactsScreen> {
-  final _phoneController = TextEditingController();
+  final _searchController = TextEditingController();
   List<dynamic> _contacts = [];
   bool _isLoading = false;
-  Map<String, dynamic>? _SearchResult;
+  List<dynamic> _searchResults = [];
 
   @override
   void initState() {
@@ -36,18 +36,23 @@ class _PriorityContactsScreenState extends ConsumerState<PriorityContactsScreen>
   }
 
   Future<void> _searchUser() async {
-    if (_phoneController.text.isEmpty) return;
+    if (_searchController.text.isEmpty) return;
     setState(() {
       _isLoading = true;
-      _SearchResult = null;
+      _searchResults = [];
     });
     try {
       final client = ref.read(apiClientProvider);
-      final response = await client.get('/priority-contacts/search/${_phoneController.text}');
-      setState(() => _SearchResult = response.data);
+      final response = await client.get('/priority-contacts/search', queryParameters: {'q': _searchController.text});
+      setState(() => _searchResults = response.data);
+      if (_searchResults.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No users found')),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('User not found')),
+        const SnackBar(content: Text('Search failed')),
       );
     } finally {
       setState(() => _isLoading = false);
@@ -58,8 +63,8 @@ class _PriorityContactsScreenState extends ConsumerState<PriorityContactsScreen>
     try {
       final client = ref.read(apiClientProvider);
       await client.post('/priority-contacts/', data: {'contact_user_id': contactUserId});
-      _phoneController.clear();
-      setState(() => _SearchResult = null);
+      _searchController.clear();
+      setState(() => _searchResults = []);
       _fetchContacts();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Contact added successfully')),
@@ -104,38 +109,46 @@ class _PriorityContactsScreenState extends ConsumerState<PriorityContactsScreen>
                 ),
                 const SizedBox(height: 16),
                 TextField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
+                  controller: _searchController,
                   style: const TextStyle(color: Colors.white),
                   decoration: InputDecoration(
-                    hintText: 'Enter phone number...',
+                    hintText: 'Search by name or phone...',
                     hintStyle: const TextStyle(color: Colors.white38),
                     filled: true,
                     fillColor: Colors.white.withOpacity(0.05),
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.search, color: Colors.blue),
-                      onPressed: _searchUser,
-                    ),
+                        icon: const Icon(Icons.search, color: Colors.blue),
+                        onPressed: _searchUser,
+                      ),
                   ),
+                  onSubmitted: (_) => _searchUser(),
                 ),
               ],
             ),
           ),
 
-          if (_SearchResult != null)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Card(
-                color: Colors.blue.withOpacity(0.1),
-                child: ListTile(
-                  title: Text(_SearchResult!['full_name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: Text(_SearchResult!['phone_number'], style: const TextStyle(color: Colors.white70)),
-                  trailing: ElevatedButton(
-                    onPressed: () => _addContact(_SearchResult!['id']),
-                    child: const Text('ADD'),
-                  ),
-                ),
+          if (_searchResults.isNotEmpty)
+            Container(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.3),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: const EdgeInsets.all(16),
+                itemCount: _searchResults.length,
+                itemBuilder: (context, index) {
+                  final result = _searchResults[index];
+                  return Card(
+                    color: Colors.blue.withOpacity(0.1),
+                    child: ListTile(
+                      title: Text(result['full_name'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      subtitle: Text(result['phone_number'], style: const TextStyle(color: Colors.white70)),
+                      trailing: ElevatedButton(
+                        onPressed: () => _addContact(result['id']),
+                        child: const Text('ADD'),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
 

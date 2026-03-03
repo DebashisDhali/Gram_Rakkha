@@ -30,4 +30,13 @@ class UserRepository(BaseRepository[User]):
             User.home_lng <= lng + lng_delta
         )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return list(result.scalars().all())
+
+    async def search_users(self, query_str: str, limit: int = 10) -> List[User]:
+        """Search users by name or phone number."""
+        query = select(User).where(
+            (User.full_name.ilike(f"%{query_str}%")) | 
+            (User.phone_number.contains(query_str))
+        ).limit(limit)
+        result = await self.db.execute(query)
+        return list(result.scalars().all())

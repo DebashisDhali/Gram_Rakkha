@@ -17,3 +17,13 @@ class AlertOut(AlertBase):
     status: AlertStatus
     timestamp: datetime
     model_config = ConfigDict(from_attributes=True)
+
+class VerificationCreate(BaseModel):
+    alert_id: UUID
+
+class VerificationOut(BaseModel):
+    id: UUID
+    alert_id: UUID
+    verifier_id: UUID
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)

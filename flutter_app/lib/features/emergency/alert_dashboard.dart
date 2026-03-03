@@ -89,6 +89,7 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
     with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _receivedAlerts = [];
   String? _triggeringType;
+  bool _isAlarmRinging = false;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
@@ -104,8 +105,14 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
     );
   }
 
+  void _stopAlarm() {
+    NotificationService().stopForegroundAlarm();
+    setState(() => _isAlarmRinging = false);
+  }
+
   @override
   void dispose() {
+    NotificationService().stopForegroundAlarm();
     _pulseController.dispose();
     super.dispose();
   }
@@ -153,8 +160,24 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
     }
   }
 
+  Future<void> _verifyAlert(String alertId) async {
+    try {
+      await ref.read(alertRepoProvider).verifyAlert(alertId);
+       ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Alert ENSURED! Thank you.')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Verification failed: $e')),
+      );
+    }
+  }
+
   void _onAlertReceived(Map<String, dynamic> data) {
-    if (data['event'] == 'EMERGENCY_ALERT' || data['event'] == 'PRIORITY_ALERT') {
+    if (data['event'] == 'EMERGENCY_ALERT' || 
+        data['event'] == 'PRIORITY_ALERT' || 
+        data['event'] == 'ALERT_VERIFIED') {
+      
       final payload = data['payload'];
       final reporterId = payload['reporter_id']?.toString();
       final currentUserId = ref.read(authStateProvider).user?.id;
@@ -165,6 +188,7 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
       }
 
       final type = payload['type']?.toString().toUpperCase() ?? 'DANGER';
+      final isVerified = data['event'] == 'ALERT_VERIFIED' || payload['status'] == 'verified';
       final reporter = payload['reporter']?.toString() ?? 'Someone';
       final config = _alertTypes.firstWhere(
         (c) => c.type == payload['type']?.toString(),
@@ -172,15 +196,26 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
       );
 
       setState(() {
-        _receivedAlerts.insert(0, data);
+        // If it's a verification update, update the existing alert in list
+        final index = _receivedAlerts.indexWhere((a) => a['payload']['id'] == payload['id']);
+        if (index != -1) {
+           _receivedAlerts[index] = data;
+        } else {
+           _receivedAlerts.insert(0, data);
+           // New alert! Start ringing if not already
+           _isAlarmRinging = true;
+           NotificationService().playForegroundAlarm();
+        }
         if (_receivedAlerts.length > 20) _receivedAlerts.removeLast();
       });
 
-      // 🔔 Fire system notification on the phone
+      // 🔔 Fire system notification
       NotificationService().showEmergencyAlert(
         id: (payload['id']?.toString().hashCode ?? 0) ^ DateTime.now().second,
-        title: '${config.emoji} $type ALERT!',
-        body: '$reporter reported an emergency. Tap to help!',
+        title: isVerified ? '✅ VERIFIED: $type ALERT!' : '${config.emoji} $type ALERT!',
+        body: isVerified 
+            ? 'Emergency at ${reporter}\'s location has been VERIFIED by contacts!'
+            : '$reporter reported an emergency. Tap to help!',
         payload: jsonEncode(payload),
       );
     }
@@ -238,6 +273,14 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
             ),
         ],
       ),
+      floatingActionButton: _isAlarmRinging
+          ? FloatingActionButton.extended(
+              onPressed: _stopAlarm,
+              backgroundColor: Colors.yellowAccent,
+              icon: const Icon(Icons.volume_off, color: Colors.black),
+              label: const Text('STOP ALARM', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            )
+          : null,
       body: Column(
         children: [
           // Greeting
@@ -413,57 +456,85 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
                               (c) => c.type == type,
                               orElse: () => _alertTypes.first,
                             );
-                            return GestureDetector(
-                              onTap: () {
-                                final entity = AlertEntity(
-                                  id: payload['id'],
-                                  reporterName: payload['reporter'],
-                                  type: type,
-                                  status: 'PENDING',
-                                  lat: (payload['location']['lat'] as num).toDouble(),
-                                  lng: (payload['location']['lng'] as num).toDouble(),
-                                  timestamp: DateTime.now(),
-                                );
-                                Navigator.push(context,
-                                    MaterialPageRoute(builder: (_) => AlertMapScreen(alert: entity)));
-                              },
-                              child: Container(
+                              return Container(
                                 margin: const EdgeInsets.only(bottom: 10),
-                                padding: const EdgeInsets.all(14),
                                 decoration: BoxDecoration(
-                                  color: config.color.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: config.color.withOpacity(0.4)),
+                                  color: config.color.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: config.color.withOpacity(0.3), width: 1.5),
                                 ),
-                                child: Row(
+                                child: Column(
                                   children: [
-                                    Text(config.emoji, style: const TextStyle(fontSize: 24)),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                    ListTile(
+                                      contentPadding: const EdgeInsets.all(12),
+                                      onTap: () {
+                                        final entity = AlertEntity(
+                                          id: payload['id'],
+                                          reporterName: payload['reporter'] ?? 'Someone',
+                                          type: type,
+                                          status: payload['status'] ?? 'PENDING',
+                                          lat: (payload['location']['lat'] as num).toDouble(),
+                                          lng: (payload['location']['lng'] as num).toDouble(),
+                                          timestamp: DateTime.now(),
+                                        );
+                                        Navigator.push(context,
+                                            MaterialPageRoute(builder: (_) => AlertMapScreen(alert: entity)));
+                                      },
+                                      leading: Text(config.emoji, style: const TextStyle(fontSize: 28)),
+                                      title: Row(
                                         children: [
-                                          Text(
-                                            '${config.label} — ${payload['reporter']}',
-                                            style: const TextStyle(
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 14),
+                                          Expanded(
+                                            child: Text(
+                                              '${config.label} — ${payload['reporter'] ?? 'Unknown'}',
+                                              style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 15),
+                                            ),
                                           ),
-                                          Text(
-                                            'Lat: ${payload['location']['lat']?.toStringAsFixed(4)}, '
-                                            'Lng: ${payload['location']['lng']?.toStringAsFixed(4)}',
-                                            style: const TextStyle(
-                                                color: Colors.white54, fontSize: 12),
+                                          if (payload['status'] == 'verified' || alert['event'] == 'ALERT_VERIFIED')
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: Colors.green.withOpacity(0.2),
+                                                borderRadius: BorderRadius.circular(12),
+                                                border: Border.all(color: Colors.green),
+                                              ),
+                                              child: const Text('VERIFIED', style: TextStyle(color: Colors.green, fontSize: 10, fontWeight: FontWeight.bold)),
+                                            ),
+                                        ],
+                                      ),
+                                      subtitle: Padding(
+                                        padding: const EdgeInsets.only(top: 4),
+                                        child: Text(
+                                          'Location: ${payload['location']['lat']?.toStringAsFixed(4)}, ${payload['location']['lng']?.toStringAsFixed(4)}',
+                                          style: const TextStyle(color: Colors.white54, fontSize: 13),
+                                        ),
+                                      ),
+                                      trailing: const Icon(Icons.map_outlined, color: Colors.blueAccent),
+                                    ),
+                                    const Divider(height: 1, color: Colors.white10),
+                                    Padding(
+                                      padding: const EdgeInsets.all(8),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: TextButton.icon(
+                                              onPressed: () => _verifyAlert(payload['id']),
+                                              icon: const Icon(Icons.verified_user_outlined, size: 18),
+                                              label: const Text('ENSURE THIS ALERT'),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor: Colors.blue.shade300,
+                                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                              ),
+                                            ),
                                           ),
                                         ],
                                       ),
                                     ),
-                                    const Icon(Icons.map_outlined, color: Colors.white38, size: 20),
                                   ],
                                 ),
-                              ),
-                            );
+                              );
                           },
                         ),
                 ),
