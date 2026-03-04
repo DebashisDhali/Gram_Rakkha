@@ -29,6 +29,7 @@ class UserEntity {
 
 class AlertEntity {
   final String id;
+  final String reporterId;
   final String reporterName;
   final String type;
   final String status;
@@ -38,6 +39,7 @@ class AlertEntity {
 
   AlertEntity({
     required this.id,
+    required this.reporterId,
     required this.reporterName,
     required this.type,
     required this.status,
@@ -49,6 +51,7 @@ class AlertEntity {
   factory AlertEntity.fromJson(Map<String, dynamic> json) {
     return AlertEntity(
       id: json['id'],
+      reporterId: json['reporter_id'] ?? '',
       reporterName: json['reporter_name'] ?? 'Unknown',
       type: json['type'],
       status: json['status'],

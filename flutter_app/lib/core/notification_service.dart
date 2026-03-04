@@ -73,6 +73,7 @@ class NotificationService {
               final Map<String, dynamic> data = jsonDecode(payload);
               final entity = AlertEntity(
                 id: data['id'],
+                reporterId: data['reporter_id']?.toString() ?? '',
                 reporterName: data['reporter'] ?? 'Unknown',
                 type: data['type'] ?? 'danger',
                 status: 'PENDING',
@@ -92,17 +93,17 @@ class NotificationService {
         },
       );
       
-      const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      final AndroidNotificationChannel channel = AndroidNotificationChannel(
         'gram_raksha_emergency_v2', 
         'GramRaksha Emergency Alerts',
         description: 'Persistent loud alerts for life-threatening emergencies',
         importance: Importance.max,
         playSound: true,
-        sound: RawResourceAndroidNotificationSound('emergency'),
+        sound: const RawResourceAndroidNotificationSound('emergency'),
         enableVibration: true,
         vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
         enableLights: true,
-        ledColor: Color(0xFFFF0000),
+        ledColor: const Color(0xFFFF0000),
       );
 
       await _plugin
@@ -125,7 +126,7 @@ class NotificationService {
     if (kIsWeb) return;
     if (!_initialized) await init();
 
-    const AndroidNotificationDetails androidNotificationDetails =
+    final AndroidNotificationDetails androidNotificationDetails =
         AndroidNotificationDetails(
       'gram_raksha_emergency_v2',
       'GramRaksha Emergency Alerts',
@@ -133,12 +134,12 @@ class NotificationService {
       importance: Importance.max,
       priority: Priority.max,
       ticker: 'EMERGENCY ALERT!',
-      color: Color(0xFFD32F2F),
+      color: const Color(0xFFD32F2F),
       enableLights: true,
       enableVibration: true,
       vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
       playSound: true,
-      sound: RawResourceAndroidNotificationSound('emergency'),
+      sound: const RawResourceAndroidNotificationSound('emergency'),
       fullScreenIntent: true,
       category: AndroidNotificationCategory.alarm,
       visibility: NotificationVisibility.public,
@@ -155,7 +156,7 @@ class NotificationService {
       interruptionLevel: InterruptionLevel.critical,
     );
 
-    const NotificationDetails notificationDetails =
+    final NotificationDetails notificationDetails =
         NotificationDetails(
           android: androidNotificationDetails,
           iOS: iosNotificationDetails,

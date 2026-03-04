@@ -89,9 +89,14 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
     with SingleTickerProviderStateMixin {
   List<Map<String, dynamic>> _receivedAlerts = [];
   String? _triggeringType;
+  String? _activeAlertId; // Track user's own triggered alert
   bool _isAlarmRinging = false;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+  
+  // For long press feedback
+  double _longPressProgress = 0.0;
+  String? _longPressingType;
 
   @override
   void initState() {
@@ -127,11 +132,16 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
-      await ref.read(alertRepoProvider).triggerAlert(
+      final alert = await ref.read(alertRepoProvider).triggerAlert(
         type: type,
         lat: pos.latitude,
         lng: pos.longitude,
       );
+      setState(() {
+        _activeAlertId = alert.id;
+        _longPressProgress = 0.0;
+        _longPressingType = null;
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -182,8 +192,18 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
       final reporterId = payload['reporter_id']?.toString();
       final currentUserId = ref.read(authStateProvider).user?.id;
 
-      // 🛑 Don't notify yourself for your own alerts
+      // 🛑 Don't ring alarm for your own alerts, but update status
       if (reporterId != null && reporterId == currentUserId) {
+        setState(() {
+          _activeAlertId = payload['id']?.toString();
+          // Find and update if already in list (for status display)
+          final index = _receivedAlerts.indexWhere((a) => a['payload']['id'] == payload['id']);
+          if (index != -1) {
+             _receivedAlerts[index] = data;
+          } else {
+             _receivedAlerts.insert(0, data);
+          }
+        });
         return;
       }
 
@@ -239,14 +259,23 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
         elevation: 0,
         title: Row(
           children: [
-            const Icon(Icons.shield, color: Colors.red, size: 26),
-            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.withOpacity(0.1),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.red.withOpacity(0.2)),
+              ),
+              child: const Icon(Icons.shield_rounded, color: Colors.redAccent, size: 24),
+            ),
+            const SizedBox(width: 12),
             const Text(
               'GramRaksha',
               style: TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                fontSize: 22,
+                letterSpacing: 0.5,
               ),
             ),
           ],
@@ -290,42 +319,67 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
               children: [
                 Text(
                   'Hello, ${user?.fullName.split(' ').first ?? 'User'} 👋',
-                  style: const TextStyle(color: Colors.white70, fontSize: 16),
+                  style: const TextStyle(
+                    color: Colors.white, 
+                    fontSize: 18, 
+                    fontWeight: FontWeight.bold
+                  ),
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.green.shade900,
+                    color: const Color(0xFF1B5E20).withOpacity(0.3),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.green.shade600),
+                    border: Border.all(color: Colors.green.withOpacity(0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.green.withOpacity(0.1),
+                        blurRadius: 8,
+                      )
+                    ]
                   ),
                   child: Row(children: [
                     Container(
                       width: 8,
                       height: 8,
                       decoration: const BoxDecoration(
-                        color: Colors.green,
+                        color: Colors.greenAccent,
                         shape: BoxShape.circle,
                       ),
                     ),
-                    const SizedBox(width: 6),
-                    const Text('LIVE', style: TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold)),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'ACTIVE', 
+                      style: TextStyle(
+                        color: Colors.greenAccent, 
+                        fontSize: 11, 
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1
+                      )
+                    ),
                   ]),
                 ),
               ],
             ),
           ),
+          
+          // My Active Alert Status
+          if (_activeAlertId != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: _buildMyActiveAlertStatus(),
+            ),
 
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
             child: Text(
               'EMERGENCY ALERT BUTTONS',
               style: TextStyle(
-                color: Colors.white38,
-                fontSize: 11,
-                letterSpacing: 2,
-                fontWeight: FontWeight.bold,
+                color: Colors.white.withOpacity(0.4),
+                fontSize: 12,
+                letterSpacing: 1.5,
+                fontWeight: FontWeight.w800,
               ),
             ),
           ),
@@ -336,6 +390,7 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
             child: Column(
               children: _alertTypes.map((config) {
                 final isTriggering = _triggeringType == config.type;
+                final isHolding = _longPressingType == config.type;
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: AnimatedBuilder(
@@ -344,63 +399,103 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
                       return Transform.scale(
                         scale: isTriggering ? _pulseAnimation.value : 1.0,
                         child: GestureDetector(
-                          onTap: isTriggering ? null : () => _triggerAlert(config.type, config),
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [config.color, config.color.withOpacity(0.7)],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: config.glowColor.withOpacity(0.4),
-                                  blurRadius: isTriggering ? 24 : 12,
-                                  spreadRadius: isTriggering ? 4 : 0,
+                          onLongPressStart: (_) {
+                            if (isTriggering) return;
+                            setState(() {
+                              _longPressingType = config.type;
+                              _longPressProgress = 0.0;
+                            });
+                          },
+                          onLongPressEnd: (_) {
+                            setState(() {
+                              _longPressingType = null;
+                              _longPressProgress = 0.0;
+                            });
+                          },
+                          onLongPressMoveUpdate: (details) {
+                            // Can add feedback here if needed
+                          },
+                          onLongPress: isTriggering ? null : () => _triggerAlert(config.type, config),
+                          child: Stack(
+                            children: [
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [config.color, config.color.withOpacity(0.7)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: config.glowColor.withOpacity(0.4),
+                                      blurRadius: isTriggering ? 24 : 12,
+                                      spreadRadius: isTriggering ? 4 : 0,
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(config.icon, color: Colors.white, size: 36),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${config.emoji}  ${config.label}',
-                                        style: const TextStyle(
+                                child: Row(
+                                  children: [
+                                    Icon(config.icon, color: Colors.white, size: 36),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${config.emoji}  ${config.label}',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1,
+                                            ),
+                                          ),
+                                          Text(
+                                            isHolding ? 'RELEASE TO CANCEL' : 'HOLD 2s TO ACTIVATE',
+                                            style: TextStyle(
+                                              color: Colors.white.withOpacity(0.9),
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              fontStyle: FontStyle.italic,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isTriggering)
+                                      const SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
                                           color: Colors.white,
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1,
+                                          strokeWidth: 2.5,
                                         ),
-                                      ),
-                                      Text(
-                                        config.description,
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.75),
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
+                                      )
+                                    else
+                                      const Icon(Icons.touch_app_rounded, color: Colors.white70),
+                                  ],
+                                ),
+                              ),
+                              if (isHolding)
+                                Positioned(
+                                  bottom: 0,
+                                  left: 0,
+                                  right: 0,
+                                  child: ClipRRect(
+                                    borderRadius: const BorderRadius.only(
+                                      bottomLeft: Radius.circular(16),
+                                      bottomRight: Radius.circular(16),
+                                    ),
+                                    child: LinearProgressIndicator(
+                                      value: null, // Just show activity for now or use a timer
+                                      backgroundColor: Colors.transparent,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white.withOpacity(0.5)),
+                                      minHeight: 6,
+                                    ),
                                   ),
                                 ),
-                                if (isTriggering)
-                                  const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2.5,
-                                    ),
-                                  )
-                                else
-                                  const Icon(Icons.chevron_right, color: Colors.white70),
-                              ],
-                            ),
+                            ],
                           ),
                         ),
                       );
@@ -449,8 +544,10 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           itemCount: _receivedAlerts.length,
                           itemBuilder: (ctx, i) {
-                            final alert = _receivedAlerts[i];
+                             final alert = _receivedAlerts[i];
                             final payload = alert['payload'];
+                            final reporterId = payload['reporter_id']?.toString();
+                            final currentUserId = ref.read(authStateProvider).user?.id;
                             final type = payload['type']?.toString() ?? 'danger';
                             final config = _alertTypes.firstWhere(
                               (c) => c.type == type,
@@ -470,6 +567,7 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
                                       onTap: () {
                                         final entity = AlertEntity(
                                           id: payload['id'],
+                                          reporterId: reporterId ?? '',
                                           reporterName: payload['reporter'] ?? 'Someone',
                                           type: type,
                                           status: payload['status'] ?? 'PENDING',
@@ -513,25 +611,30 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
                                       ),
                                       trailing: const Icon(Icons.map_outlined, color: Colors.blueAccent),
                                     ),
-                                    const Divider(height: 1, color: Colors.white10),
-                                    Padding(
-                                      padding: const EdgeInsets.all(8),
-                                      child: Row(
+                                    if (payload['status'] != 'verified' && reporterId != currentUserId)
+                                      Column(
                                         children: [
-                                          Expanded(
-                                            child: TextButton.icon(
-                                              onPressed: () => _verifyAlert(payload['id']),
-                                              icon: const Icon(Icons.verified_user_outlined, size: 18),
-                                              label: const Text('ENSURE THIS ALERT'),
-                                              style: TextButton.styleFrom(
-                                                foregroundColor: Colors.blue.shade300,
-                                                padding: const EdgeInsets.symmetric(vertical: 10),
-                                              ),
+                                          const Divider(height: 1, color: Colors.white10),
+                                          Padding(
+                                            padding: const EdgeInsets.all(8),
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: TextButton.icon(
+                                                    onPressed: () => _verifyAlert(payload['id']),
+                                                    icon: const Icon(Icons.verified_user_outlined, size: 18),
+                                                    label: const Text('ENSURE THIS ALERT'),
+                                                    style: TextButton.styleFrom(
+                                                      foregroundColor: Colors.blue.shade300,
+                                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
                                         ],
                                       ),
-                                    ),
                                   ],
                                 ),
                               );
@@ -541,6 +644,187 @@ class _AlertDashboardState extends ConsumerState<AlertDashboard>
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMyActiveAlertStatus() {
+    final alertData = _receivedAlerts.firstWhere(
+      (a) => a['payload']['id'] == _activeAlertId,
+      orElse: () => {},
+    );
+    
+    if (alertData.isEmpty) return const SizedBox.shrink();
+
+    final payload = alertData['payload'];
+    final status = payload['status'] ?? 'pending';
+    final hasPrioritySent = alertData['event'] == 'PRIORITY_ALERT' || status != 'pending';
+    final isVerified = status == 'verified' || alertData['event'] == 'ALERT_VERIFIED';
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E2E), // Deep slate
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.red.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.1),
+            blurRadius: 20,
+            spreadRadius: 2,
+          )
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.emergency_rounded, color: Colors.redAccent, size: 22),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                'LIVE ALERT TRACKER',
+                style: TextStyle(
+                  color: Colors.white, 
+                  fontWeight: FontWeight.w900, 
+                  fontSize: 13, 
+                  letterSpacing: 1.5
+                ),
+              ),
+              const Spacer(),
+              IconButton(
+                onPressed: () => setState(() => _activeAlertId = null),
+                icon: const Icon(Icons.close, color: Colors.white38, size: 20),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(color: Colors.white10),
+          const SizedBox(height: 12),
+          _buildStatusStep('1', 'Alert Signal Sent', true, true, true),
+          _buildStatusStep('2', 'Notifying Priority List', hasPrioritySent, true, true),
+          _buildStatusStep('3', 'Neighbor Verification', isVerified, hasPrioritySent, true),
+          _buildStatusStep('4', 'Gram-Wide Broadcast', isVerified, isVerified, false),
+          if (isVerified)
+            Container(
+              margin: const EdgeInsets.only(top: 15),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.green.withOpacity(0.2), Colors.green.withOpacity(0.05)],
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: const [
+                  Icon(Icons.verified_rounded, color: Colors.greenAccent, size: 20),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'SITUATION VERIFIED. EMERGENCY SERVICES NOTIFIED.', 
+                      style: TextStyle(
+                        color: Colors.greenAccent, 
+                        fontWeight: FontWeight.w800, 
+                        fontSize: 11
+                      )
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusStep(String step, String label, bool isDone, bool isCurrent, bool showConnector) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: isDone 
+                      ? Colors.green.withOpacity(0.2) 
+                      : (isCurrent ? Colors.red.withOpacity(0.2) : Colors.white.withOpacity(0.05)),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: isDone 
+                        ? Colors.greenAccent 
+                        : (isCurrent ? Colors.redAccent : Colors.white10),
+                    width: 1.5,
+                  ),
+                ),
+                child: Center(
+                  child: isDone 
+                    ? const Icon(Icons.check_rounded, size: 16, color: Colors.greenAccent)
+                    : Text(
+                        step, 
+                        style: TextStyle(
+                          color: isCurrent ? Colors.redAccent : Colors.white24, 
+                          fontSize: 11, 
+                          fontWeight: FontWeight.w900
+                        )
+                      ),
+                ),
+              ),
+              if (showConnector)
+                Expanded(
+                  child: Container(
+                    width: 2,
+                    color: isDone ? Colors.greenAccent.withOpacity(0.3) : Colors.white10,
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 5),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: isDone 
+                        ? Colors.white 
+                        : (isCurrent ? Colors.redAccent : Colors.white24),
+                    fontSize: 14,
+                    fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 15),
+              ],
+            ),
+          ),
+          if (isCurrent && !isDone)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2, 
+                  valueColor: AlwaysStoppedAnimation(Colors.redAccent)
+                ),
+              ),
+            ),
         ],
       ),
     );
